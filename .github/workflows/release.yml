@@ -1,0 +1,58 @@
+# 推送 v 開頭的版本標籤（例如 v1.2.0）時：在 Windows 上打包 AutoLogo.exe，發布到 GitHub Releases。
+# 已安裝的程式按「檢查更新」就會看到這個版本。發版請用 release.sh。
+name: 打包並發布新版
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 確認版本號一致
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          code=$(python -c "import version; print(version.VERSION)")
+          if [ "$tag" != "$code" ]; then
+            echo "::error::標籤 $GITHUB_REF_NAME 和 version.py 的版本 $code 不一致"
+            exit 1
+          fi
+
+      - name: 取得更新內容（版本標籤的說明文字）
+        shell: bash
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > notes.md
+          cat notes.md
+
+      - name: 安裝套件
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: 打包
+        run: pyinstaller --noconfirm --clean AutoLogo.spec
+
+      - name: 加入使用者檔案並壓縮
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse logos dist/AutoLogo/logos
+          New-Item -ItemType Directory -Force dist/AutoLogo/fonts | Out-Null
+          Copy-Item sample.xlsx, README.md dist/AutoLogo/
+          Compress-Archive -Path dist/AutoLogo -DestinationPath AutoLogo.zip
+
+      - name: 發布到 GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: notes.md
+          files: AutoLogo.zip

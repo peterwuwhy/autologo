@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>床墊標籤列印</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>床墊標籤列印</h1>
+  <nav>
+    <button class="tab active" data-tab="print">列印</button>
+    <button class="tab" data-tab="settings">設定</button>
+    <button class="tab" data-tab="calib">校正</button>
+    <button class="tab" data-tab="log">列印紀錄</button>
+    <button class="tab" data-tab="diag">診斷</button>
+  </nav>
+  <span id="app-version" class="app-version"></span>
+  <button type="button" id="update-banner" class="update-banner" hidden>有新版本，按此更新</button>
+</header>
+
+<main>
+  <!-- 列印 -->
+  <section id="tab-print" class="panel active">
+    <div class="row-between">
+      <label id="drop" class="drop">
+        <input type="file" id="file" accept=".xlsx,.xlsm" hidden>
+        <strong>點此選擇或拖曳 Excel 檔</strong>
+        <span id="file-name">需含工作表「型號資料」與「訂單」</span>
+      </label>
+      <a class="btn secondary" href="/api/template">下載 Excel 範本</a>
+    </div>
+
+    <div id="errors" class="errors" hidden></div>
+
+    <div id="result" hidden>
+      <div class="toolbar">
+        <span id="summary"></span>
+        <div class="spacer"></div>
+        <span id="mode-badge" class="badge" hidden>測試模式：不送印表機</span>
+        <button id="print-btn" class="btn">列印選取</button>
+      </div>
+      <div id="progress" class="progress" hidden>
+        <div class="bar"><div id="progress-bar"></div></div>
+        <span id="progress-text"></span>
+        <button id="resume-btn" class="btn secondary" hidden>從失敗處繼續</button>
+        <button id="diag-jump-btn" class="btn secondary diag-jump" hidden>複製診斷資訊</button>
+        <a href="#" id="diag-jump-link" class="diag-jump diag-link" hidden>印出來有問題？產生診斷報告</a>
+      </div>
+      <table class="grid">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="check-all" checked></th>
+            <th>Excel 列</th><th>型號</th><th>尺寸 (cm)</th><th>張數</th><th>備註</th><th>預覽</th><th>狀態</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 設定 -->
+  <section id="tab-settings" class="panel">
+    <div class="settings-layout">
+      <div class="settings-form">
+        <fieldset>
+          <legend>印表機（GoDEX G500+）</legend>
+          <label>連線方式
+            <select data-path="printer.connection" id="connection">
+              <option value="network">網路（網路線）</option>
+              <option value="usb">USB（Windows 印表機）</option>
+            </select>
+          </label>
+          <label class="usb-only">USB 印表機<input data-path="printer.usb_name" list="usb-printers" placeholder="例如 Godex G500"></label>
+          <datalist id="usb-printers"></datalist>
+          <label class="net-only">IP 位址<input data-path="printer.ip"></label>
+          <label class="net-only">連接埠<input data-path="printer.port" type="number"></label>
+          <label>濃度 (0–19)<input data-path="printer.darkness" type="number" min="0" max="19"></label>
+          <label>速度<input data-path="printer.speed" type="number" min="1" max="7"></label>
+          <label>解析度 (dpi)<input data-path="printer.dpi" type="number"></label>
+          <label>列印方式
+            <select data-path="printer.print_mode">
+              <option value="">維持印表機目前設定</option>
+              <option value="T">熱轉印（有裝碳帶）</option>
+              <option value="D">熱感（沒有碳帶）</option>
+            </select>
+          </label>
+          <label>送圖方式
+            <select data-path="printer.image_method">
+              <option value="q">Q 指令（預設）</option>
+              <option value="bmp">BMP 下載（~EB + Y）</option>
+            </select>
+          </label>
+          <label class="check"><input data-path="printer.invert" type="checkbox">黑白反相（印出來黑白顛倒時勾選）</label>
+          <label class="check"><input data-path="printer.dry_run" type="checkbox">測試模式：不送印表機，改存 .prn 檔到 output 資料夾</label>
+          <div class="actions">
+            <button type="button" class="btn secondary" id="test-conn">連線測試</button>
+            <button type="button" class="btn secondary" id="test-print">測試列印 1 張</button>
+            <span id="printer-msg" class="msg"></span>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>標籤紙（mm）</legend>
+          <label>寬<input data-path="label.width_mm" type="number" step="0.5"></label>
+          <label>高<input data-path="label.height_mm" type="number" step="0.5"></label>
+          <label>間距 (gap，0 = 連續紙)<input data-path="label.gap_mm" type="number" step="0.5"></label>
+          <label>左右偏移<input data-path="label.offset_x_mm" type="number" step="0.5"></label>
+          <label>上下偏移<input data-path="label.offset_y_mm" type="number" step="0.5"></label>
+          <label>邊界<input data-path="label.margin_mm" type="number" step="0.5"></label>
+          <label>Logo 上方留白 (mm)<input data-path="label.logo_top_mm" type="number" step="0.5" min="0"></label>
+          <label>Logo 高度比例<input data-path="label.logo_height_ratio" type="number" step="0.01" min="0" max="0.8"></label>
+          <label>最大字高<input data-path="label.max_font_mm" type="number" step="0.1"></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>公司資料（每張標籤都相同）</legend>
+          <label>製造廠商<input data-path="company.製造廠商"></label>
+          <label>廠商地址<input data-path="company.廠商地址"></label>
+          <label>統一編號<input data-path="company.統一編號"></label>
+          <label>服務專線<input data-path="company.服務專線"></label>
+          <label>製造地<input data-path="company.製造地"></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>字型</legend>
+          <label>字型檔路徑（空白 = 自動）<input data-path="font.path" placeholder="例：C:\Windows\Fonts\msjh.ttc"></label>
+          <label>字型編號 (ttc index)<input data-path="font.index" type="number" min="0"></label>
+        </fieldset>
+
+        <div class="actions sticky">
+          <button type="button" class="btn" id="save-settings">儲存設定</button>
+          <span id="settings-msg" class="msg"></span>
+        </div>
+
+        <fieldset>
+          <legend>品牌 Logo</legend>
+          <div id="logo-list" class="logo-list"></div>
+          <div class="logo-upload">
+            <input id="logo-name" placeholder="品牌名稱（= Excel 品牌Logo 欄）">
+            <input id="logo-file" type="file" accept=".png,.jpg,.jpeg,.bmp">
+            <button type="button" class="btn secondary" id="logo-upload">上傳</button>
+          </div>
+          <span id="logo-msg" class="msg"></span>
+        </fieldset>
+      </div>
+
+      <aside class="settings-preview">
+        <h3>範例預覽</h3>
+        <img id="sample-preview" alt="範例標籤">
+        <p class="hint">儲存設定後更新。灰框 = 標籤紙邊緣。</p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 校正 -->
+  <section id="tab-calib" class="panel">
+    <div class="diag-steps">
+      <strong>換新標籤機、換一捲不同的紙，或印出來位置不對時：</strong>
+      從 ① 依序做到 ⑤，每一步都會自動存檔。
+    </div>
+    <div class="settings-layout">
+      <div class="settings-form">
+        <fieldset>
+          <legend>① 連線與狀態</legend>
+          <p class="step-note">目前連線：<strong id="cal-conn"></strong>　（要換印表機或連線方式，請先到「設定」頁修改並儲存）</p>
+          <div class="actions">
+            <button type="button" class="btn" id="cal-status">檢查印表機狀態</button>
+            <button type="button" class="btn secondary" id="cal-cancel">清除錯誤</button>
+            <span id="cal1-msg" class="msg"></span>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>② 紙張與列印方式</legend>
+          <label class="check"><input type="radio" name="cal-paper" value="gap">間距紙：一張一張分開，中間有空隙</label>
+          <label class="check"><input type="radio" name="cal-paper" value="continuous">連續紙：整捲沒有分隔</label>
+          <label id="cal-gap-wrap">間距 (mm)<input id="cal-gap" type="number" step="0.5" min="0"></label>
+          <label>列印方式
+            <select id="cal-mode">
+              <option value="D">熱感（沒有碳帶）</option>
+              <option value="T">熱轉印（有裝碳帶）</option>
+            </select>
+          </label>
+          <div class="actions">
+            <button type="button" class="btn" id="cal-media">套用並寫入印表機</button>
+            <button type="button" class="btn secondary" id="cal-sensor" title="間距紙才需要">紙張自動偵測</button>
+            <span id="cal2-msg" class="msg"></span>
+          </div>
+          <p class="step-note hint">亮紅燈、狀態「01 缺紙或卡紙」但紙其實有裝好 → 通常是紙張類型選錯（連續紙選成間距紙）。
+            沒有裝黑色碳帶就選「熱感」，選錯會出紙但全白。</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>③ 寬度與位置</legend>
+          <p class="step-note">先印尺規，看印在紙上的刻度數字（單位 mm），程式會算出紙寬並讓內容對準紙張。</p>
+          <label>印字頭寬度 (mm)<input id="cal-head" type="number" step="1"></label>
+          <div class="actions">
+            <button type="button" class="btn" id="cal-ruler">印尺規</button>
+          </div>
+          <label>紙上最左邊看得到的數字<input id="cal-left" type="number" step="0.5" placeholder="例：20"></label>
+          <label>紙上最右邊看得到的數字／刻度<input id="cal-right" type="number" step="0.5" placeholder="例：85"></label>
+          <div class="actions">
+            <button type="button" class="btn" id="cal-width">計算寬度並套用</button>
+          </div>
+          <p class="step-note hint">驗證（建議）：用算好的寬度再印一次尺規，紙的左邊緣應該剛好從 0 開始。
+            不是從 0 開始，就填左邊緣看到的數字，內容會往右移這麼多。</p>
+          <div class="actions">
+            <button type="button" class="btn secondary" id="cal-verify">用新寬度印驗證尺規</button>
+          </div>
+          <label>驗證尺規：紙的左邊緣看到的數字<input id="cal-vleft" type="number" step="0.5" placeholder="從 0 開始就填 0"></label>
+          <div class="actions">
+            <button type="button" class="btn secondary" id="cal-offset">套用左右偏移</button>
+            <span id="cal3-msg" class="msg"></span>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>④ 送圖方式</legend>
+          <p class="step-note">印 3 張測試：1 只有文字、2 用 BMP 方式的測試圖、3 用 Q 指令的測試圖（左半黑、右半空心框）。</p>
+          <div class="actions">
+            <button type="button" class="btn" id="cal-full">印綜合測試（3 張）</button>
+          </div>
+          <label class="check"><input type="radio" name="cal-method" value="q">第 3 張（Q 指令）有印出測試圖 → 用 Q 指令（建議）</label>
+          <label class="check"><input type="radio" name="cal-method" value="bmp">只有第 2 張（BMP）有測試圖 → 用 BMP 下載</label>
+          <label class="check"><input type="checkbox" id="cal-invert">測試圖黑白相反（左白右黑）</label>
+          <div class="actions">
+            <button type="button" class="btn secondary" id="cal-method-apply">套用</button>
+            <span id="cal4-msg" class="msg"></span>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>⑤ 範例標籤</legend>
+          <label>濃度 (0–19)<input id="cal-dark" type="number" min="0" max="19"></label>
+          <label>速度<input id="cal-speed" type="number" min="1" max="7"></label>
+          <div class="actions">
+            <button type="button" class="btn" id="cal-sample">印範例標籤</button>
+            <span id="cal5-msg" class="msg"></span>
+          </div>
+          <p class="step-note hint">太淡 → 濃度調高 2～3；糊掉 → 調低；字不清楚 → 速度調慢。
+            整張往上或往下偏，到「設定」頁調「上下偏移」。</p>
+        </fieldset>
+      </div>
+
+      <aside class="settings-preview">
+        <h3>範例預覽</h3>
+        <img id="cal-preview" alt="範例標籤">
+        <p class="hint">印出來應該跟這張一樣。</p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 紀錄 -->
+  <section id="tab-log" class="panel">
+    <table class="grid">
+      <thead><tr><th>時間</th><th>型號</th><th>尺寸</th><th>張數</th><th>結果</th><th>訊息</th></tr></thead>
+      <tbody id="log-rows"></tbody>
+    </table>
+    <p class="hint">完整紀錄存在程式資料夾的 print_log.csv（可用 Excel 開啟）。</p>
+  </section>
+
+  <!-- 診斷 -->
+  <section id="tab-diag" class="panel">
+    <div class="diag-steps">
+      <strong>印不出來或印錯時：</strong>
+      ① 按「產生診斷報告」 → ② 按「複製報告」 → ③ 貼給 AI 或技術人員，並附上出紙照片。
+    </div>
+
+    <fieldset>
+      <legend>診斷報告</legend>
+      <div class="actions">
+        <button type="button" class="btn" id="diag-run">產生診斷報告</button>
+        <button type="button" class="btn secondary" id="diag-copy" disabled>複製報告</button>
+        <span id="diag-msg" class="msg"></span>
+      </div>
+      <textarea id="diag-text" readonly placeholder="按「產生診斷報告」後顯示在這裡"></textarea>
+    </fieldset>
+
+    <fieldset>
+      <legend>測試與遠端控制</legend>
+      <div class="actions">
+        <button type="button" class="btn" data-cmd="full"
+          data-confirm="連續印 3 張測試標籤（1 純文字、2 BMP 圖、3 Q 圖）？印完請把 3 張一起拍照。">綜合測試（3 張）</button>
+        <button type="button" class="btn secondary" data-cmd="basic"
+          data-confirm="印一張不含圖片的測試標籤（外框＋英文字）？">基本測試（不含圖片）</button>
+        <button type="button" class="btn secondary" data-cmd="selftest"
+          data-confirm="印出印表機的自我測試頁（上面有印表機內部設定）？印完請拍照。">列印自我測試頁</button>
+        <button type="button" class="btn secondary" data-cmd="cancel"
+          data-confirm="清除印表機的錯誤狀態（等同按取消鍵）？">清除錯誤</button>
+        <button type="button" class="btn secondary" data-cmd="sensor"
+          data-confirm="讓印表機自動偵測標籤紙（會送出幾張空白標籤）？請先確認標籤紙已裝好。">紙張自動偵測</button>
+        <button type="button" class="btn secondary" data-cmd="feed"
+          data-confirm="讓印表機送紙一次？">送紙一次</button>
+      </div>
+      <span id="cmd-msg" class="msg"></span>
+      <p class="hint">
+        綜合測試怎麼看：第 1 張沒字 → 問題在印表機、紙張或列印方式；第 1 張有字、第 3 張沒有圖 → 設定頁「送圖方式」改成第 2 張能印的方式。
+        每張的測試圖應該出現在橫線「下方」，左半黑、右半空心框且右上有黑槓。
+      </p>
+    </fieldset>
+
+    <fieldset id="update-box">
+      <legend>程式更新</legend>
+      <p>目前版本：<strong id="update-current">—</strong></p>
+      <div class="actions">
+        <button type="button" class="btn secondary" id="update-check">檢查更新</button>
+        <button type="button" class="btn" id="update-install" hidden>立即更新</button>
+        <span id="update-msg" class="msg"></span>
+      </div>
+      <pre id="update-notes" class="update-notes" hidden></pre>
+      <p class="hint">
+        更新會保留設定、Logo 和列印紀錄。按「立即更新」後，程式會自動關閉再重新開啟（約 1 分鐘），期間請勿列印。
+      </p>
+    </fieldset>
+  </section>
+</main>
+
+<dialog id="preview-dialog">
+  <img id="preview-big" alt="標籤預覽">
+  <form method="dialog"><button class="btn secondary">關閉</button></form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

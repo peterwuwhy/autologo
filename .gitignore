@@ -1,0 +1,16 @@
+# 每台電腦自己的資料，不上傳
+config.json
+print_log.csv
+output/
+fonts/*
+!fonts/.gitkeep
+
+# 自動產生的檔案
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+AutoLogo.zip
+.DS_Store
+__MACOSX/
