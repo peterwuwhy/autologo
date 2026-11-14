@@ -10,7 +10,8 @@
 <header>
   <h1>床墊標籤列印</h1>
   <nav>
-    <button class="tab active" data-tab="print">列印</button>
+    <button class="tab active" data-tab="work">工作單</button>
+    <button class="tab" data-tab="print">Excel 列印</button>
     <button class="tab" data-tab="settings">設定</button>
     <button class="tab" data-tab="calib">校正</button>
     <button class="tab" data-tab="log">列印紀錄</button>
@@ -21,8 +22,38 @@
 </header>
 
 <main>
+  <!-- 工作單：從 Google 試算表讀當天的單，依品牌、規格挑布標（.ezp），換上尺寸後列印 -->
+  <section id="tab-work" class="panel active">
+    <div class="toolbar wrap">
+      <label class="inline">工作表 <select id="work-tab"></select></label>
+      <strong id="work-title"></strong>
+      <button id="work-refresh" class="btn secondary">重新整理</button>
+      <button id="work-sync" class="btn secondary" title="布標資料夾有新增或修改 .ezp 時按這個">同步布標</button>
+      <span id="work-msg" class="msg"></span>
+      <div class="spacer"></div>
+      <span id="work-badge" class="badge" hidden>測試模式：不送印表機</span>
+      <button id="work-print" class="btn" disabled>列印勾選</button>
+    </div>
+    <div id="work-errors" class="errors" hidden></div>
+    <div id="work-progress" class="progress" hidden>
+      <div class="bar"><div id="work-bar"></div></div>
+      <span id="work-progress-text"></span>
+      <button id="work-resume" class="btn secondary" hidden>從失敗處繼續</button>
+    </div>
+    <table class="grid" id="work-table" hidden>
+      <thead>
+        <tr>
+          <th></th><th>交期</th><th>傢俱行</th><th>品牌</th><th>規格</th><th>尺寸</th><th>數量</th>
+          <th>布標</th><th>印在布標上的尺寸</th><th>預覽</th><th>狀態</th>
+        </tr>
+      </thead>
+      <tbody id="work-rows"></tbody>
+    </table>
+    <label class="check-line"><input type="checkbox" id="work-show-all"> 也顯示沒有布標的列（<span id="work-hidden-count">0</span> 列）</label>
+  </section>
+
   <!-- 列印 -->
-  <section id="tab-print" class="panel active">
+  <section id="tab-print" class="panel">
     <div class="row-between">
       <label id="drop" class="drop">
         <input type="file" id="file" accept=".xlsx,.xlsm" hidden>
@@ -112,6 +143,15 @@
           <label>Logo 上方留白 (mm)<input data-path="label.logo_top_mm" type="number" step="0.5" min="0"></label>
           <label>Logo 高度比例<input data-path="label.logo_height_ratio" type="number" step="0.01" min="0" max="0.8"></label>
           <label>最大字高<input data-path="label.max_font_mm" type="number" step="0.1"></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>工作單與布標（Google 雲端）</legend>
+          <p class="step-note">兩個網址都要在 Google 設成「知道連結的任何人都可以檢視」。</p>
+          <label class="wide">工作單（Google 試算表）網址<input data-path="source.sheet_url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>
+          <label class="wide">布標資料夾（Google 雲端硬碟）網址<input data-path="source.folder_url" placeholder="https://drive.google.com/drive/folders/…"></label>
+          <label>品牌對照（一行一組：工作單寫法=資料夾名稱）<textarea data-path="source.brand_aliases" rows="4" placeholder="EMOSA=愛夢莎"></textarea></label>
+          <label>尺寸換算（一行一組：尺=公分）<textarea data-path="source.size_cm" rows="4" placeholder="5=152"></textarea></label>
         </fieldset>
 
         <fieldset>

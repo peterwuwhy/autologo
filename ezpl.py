@@ -160,9 +160,14 @@ def _offsets(cfg):
 
 
 def build_job(label, cfg, copies=None):
-    p = cfg["printer"]
     copies = int(copies if copies is not None else label.get("數量", 1))
-    img, x, y = _fit_to_label(render(label, cfg), *_offsets(cfg), cfg)
+    return build_image_job(render(label, cfg), cfg, copies)
+
+
+def build_image_job(img, cfg, copies):
+    """把一張已經畫好的標籤圖（mode '1'）包成列印指令。"""
+    p = cfg["printer"]
+    img, x, y = _fit_to_label(img, *_offsets(cfg), cfg)
     invert = p.get("invert", False)
     if p.get("image_method") == "bmp":
         return (
@@ -297,12 +302,17 @@ def describe_job(job):
     return "\n".join(out)
 
 
+def label_size(label):
+    """紀錄用的尺寸文字：布標列印直接帶「尺寸」，Excel 列印是寬 x 長。"""
+    return label.get("尺寸") or f'{label["寬"]}x{label["長"]}'
+
+
 def save_last_job(kind, job, ok, message, label=None):
     os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
     info = {
         "時間": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "類型": kind,
-        "標籤": f'{label["型號"]} {label["寬"]}x{label["長"]} x{label.get("數量", 1)}' if label else "",
+        "標籤": f'{label["型號"]} {label_size(label)} x{label.get("數量", 1)}' if label else "",
         "結果": "成功" if ok else "失敗",
         "訊息": message,
         "指令總長": len(job) if job else 0,

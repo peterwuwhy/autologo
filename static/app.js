@@ -10,6 +10,7 @@ let isDryRun = false;
 function showTab(name) {
   $$(".tab").forEach((x) => x.classList.toggle("active", x.dataset.tab === name));
   $$(".panel").forEach((p) => p.classList.toggle("active", p.id === "tab-" + name));
+  if (name === "work" && !work) loadWork();
   if (name === "settings") loadSettings();
   if (name === "calib") loadCalibration();
   if (name === "log") loadLog();
@@ -30,6 +31,195 @@ async function api(url, opts = {}) {
 
 function postJSON(url, data) {
   return api(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+}
+
+// ---------- 工作單 ----------
+let work = null;       // /api/work 的回應
+let workQueue = [];    // 待印的列號
+let workPos = 0;
+
+async function loadWork(opts = {}) {
+  const q = new URLSearchParams();
+  const tab = opts.tab ?? (work ? work.tab : "");
+  if (tab) q.set("tab", tab);
+  if (opts.refresh) q.set("refresh", "1");
+  flash("#work-msg", true, opts.refresh || !work ? "讀取工作單中…" : "");
+  $("#work-refresh").disabled = true;
+  let r;
+  try {
+    r = await api("/api/work?" + q);
+  } catch (err) {
+    r = { ok: false, message: err.message };
+  }
+  $("#work-refresh").disabled = false;
+  if (!r.ok) {
+    flash("#work-msg", false, r.message);
+    return;
+  }
+  work = r;
+  flash("#work-msg", true, `${r.fetched} 更新，布標 ${r.library} 個${r.sync ? "（" + r.sync + "）" : ""}`);
+  $("#work-tab").innerHTML = r.tabs.map((t) => `<option${t === r.tab ? " selected" : ""}>${esc(t)}</option>`).join("");
+  $("#work-title").textContent = r.title;
+  $("#work-badge").hidden = !r.dry_run;
+  const box = $("#work-errors");
+  box.hidden = !r.errors.length;
+  box.innerHTML = r.errors.length ? `<ul>${r.errors.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : "";
+  $("#work-progress").hidden = true;
+  renderWork();
+}
+
+function workRow(n) {
+  return work.rows.find((r) => r.row === n);
+}
+
+function previewUrl(r, file, size) {
+  return "/api/work/preview.png?" + new URLSearchParams({ brand: r.folder, file, size, t: Date.now() });
+}
+
+function renderWork() {
+  const showAll = $("#work-show-all").checked;
+  const hidden = work.rows.filter((r) => !r.folder).length;
+  $("#work-hidden-count").textContent = hidden;
+  $("#work-table").hidden = false;
+  const rows = work.rows.filter((r) => showAll || r.folder);
+  $("#work-rows").innerHTML = rows.length
+    ? rows.map((r) => {
+        const base = `<td>${esc(r.date)}</td><td>${esc(r.shop)}</td><td>${esc(r.brand)}</td><td>${esc(r.spec)}</td><td>${esc(r.size)}</td><td>${r.qty}</td>`;
+        if (!r.folder) {
+          const why = r.brand ? `沒有「${esc(r.brand)}」的布標資料夾` : "沒有品牌";
+          return `<tr class="off"><td></td>${base}<td colspan="3">${why}</td><td></td></tr>`;
+        }
+        const ready = r.file && r.size_text && r.match !== "guess";
+        const hint = { guess: "名稱不完全相同，請確認", none: "找不到同名的布標，請選擇", saved: "上次選的" }[r.match] || "";
+        const opts = `<option value="">請選擇…</option>` + r.files.map((f) => `<option value="${esc(f)}"${f === r.file ? " selected" : ""}>${esc(f.replace(/\.ezp$/i, ""))}</option>`).join("");
+        return `<tr data-row="${r.row}">
+          <td><input type="checkbox" class="pick"${ready && !r.printed ? " checked" : ""}${r.file && r.size_text ? "" : " disabled"}></td>${base}
+          <td><select class="file${r.file ? "" : " need"}">${opts}</select><span class="hint${r.match === "saved" ? "" : " warn"}">${hint}</span></td>
+          <td><input class="size${r.size_text ? "" : " need"}" value="${esc(r.size_text)}" placeholder="${esc(r.size_old || "例：152cm×188cm")}"></td>
+          <td>${r.file ? `<img class="thumb" loading="lazy" src="${previewUrl(r, r.file, r.size_text)}" alt="預覽">` : ""}</td>
+          <td class="status${r.printed ? " status-ok" : ""}">${r.printed ? "已印 " + esc(r.printed) : ""}</td>
+        </tr>`;
+      }).join("")
+    : `<tr><td colspan="11">這個工作表沒有${showAll ? "" : "對得到布標的"}資料</td></tr>`;
+  updateWorkSummary();
+}
+
+function workPicked() {
+  return [...$$("#work-rows tr[data-row]")].filter((tr) => tr.querySelector(".pick").checked).map((tr) => +tr.dataset.row);
+}
+
+function updateWorkSummary() {
+  const sel = workPicked();
+  const sheets = sel.reduce((n, row) => n + workRow(row).qty, 0);
+  $("#work-print").textContent = sel.length ? `列印勾選（${sel.length} 筆、${sheets} 張）` : "列印勾選";
+  $("#work-print").disabled = !sel.length;
+}
+
+// 換布標或改尺寸：更新預覽，資料齊全才能勾選
+async function workRowChanged(tr, fileChanged) {
+  const r = workRow(+tr.dataset.row);
+  const sel = tr.querySelector(".file");
+  const size = tr.querySelector(".size");
+  if (fileChanged && sel.value) {
+    // 每個布標的尺寸寫法不同（公分或尺），換布標要重算
+    const s = await api("/api/work/size?" + new URLSearchParams({ brand: r.folder, file: sel.value, size: r.size }));
+    size.value = s.size_text;
+    size.placeholder = s.size_old || "例：152cm×188cm";
+    tr.querySelector(".hint").textContent = "";
+  }
+  const file = sel.value;
+  const text = size.value.trim();
+  sel.classList.toggle("need", !file);
+  size.classList.toggle("need", !text);
+  const pick = tr.querySelector(".pick");
+  pick.disabled = !(file && text);
+  if (pick.disabled) pick.checked = false;
+  tr.children[9].innerHTML = file ? `<img class="thumb" src="${previewUrl(r, file, text)}" alt="預覽">` : "";
+  updateWorkSummary();
+}
+
+$("#work-rows").addEventListener("change", (e) => {
+  const tr = e.target.closest("tr[data-row]");
+  if (!tr) return;
+  if (e.target.classList.contains("pick")) updateWorkSummary();
+  else workRowChanged(tr, e.target.classList.contains("file"));
+});
+$("#work-rows").addEventListener("click", (e) => {
+  if (e.target.classList.contains("thumb")) {
+    $("#preview-big").src = e.target.src;
+    $("#preview-dialog").showModal();
+  }
+});
+$("#work-tab").addEventListener("change", (e) => loadWork({ tab: e.target.value }));
+$("#work-refresh").addEventListener("click", () => loadWork({ refresh: true }));
+$("#work-show-all").addEventListener("change", () => work && renderWork());
+$("#work-sync").addEventListener("click", async () => {
+  flash("#work-msg", true, "同步布標中…（第一次約需半分鐘）");
+  $("#work-sync").disabled = true;
+  let r;
+  try {
+    r = await postJSON("/api/work/sync", {});
+  } catch (err) {
+    r = { ok: false, message: err.message };
+  }
+  $("#work-sync").disabled = false;
+  if (r.ok) await loadWork();
+  flash("#work-msg", r.ok, r.message);
+});
+
+$("#work-print").addEventListener("click", () => {
+  const sel = workPicked();
+  const sheets = sel.reduce((n, row) => n + workRow(row).qty, 0);
+  const again = sel.filter((row) => workRow(row).printed).length;
+  const where = work.dry_run ? "（測試模式：存成檔案，不會真的印）" : "";
+  const warn = again ? `\n其中 ${again} 筆之前印過，會再印一次。` : "";
+  if (!confirm(`確定列印 ${sel.length} 筆、共 ${sheets} 張布標？${where}${warn}`)) return;
+  workQueue = sel;
+  workPos = 0;
+  runWorkQueue();
+});
+$("#work-resume").addEventListener("click", runWorkQueue);
+
+async function runWorkQueue() {
+  const bar = () => {
+    $("#work-bar").style.width = (workQueue.length ? (workPos / workQueue.length) * 100 : 0) + "%";
+    $("#work-progress-text").textContent = `${workPos} / ${workQueue.length}`;
+  };
+  $("#work-progress").hidden = false;
+  $("#work-resume").hidden = true;
+  $("#work-print").disabled = true;
+  while (workPos < workQueue.length) {
+    const row = workQueue[workPos];
+    const tr = $(`#work-rows tr[data-row="${row}"]`);
+    const status = tr.querySelector(".status");
+    status.textContent = "列印中…";
+    status.className = "status status-busy";
+    bar();
+    let r;
+    try {
+      r = await postJSON("/api/work/print", {
+        tab: work.tab, row, file: tr.querySelector(".file").value, size: tr.querySelector(".size").value.trim(),
+      });
+    } catch (err) {
+      r = { ok: false, message: err.message };
+    }
+    if (!r.ok) {
+      status.textContent = "失敗";
+      status.className = "status status-bad";
+      $("#work-progress-text").textContent = `第 ${workPos + 1} 筆失敗：${r.message}`;
+      $("#work-resume").hidden = false;
+      $("#work-print").disabled = false;
+      return;
+    }
+    status.textContent = "✓ " + r.message;
+    status.className = "status status-ok";
+    tr.querySelector(".pick").checked = false;
+    if (!work.dry_run) workRow(row).printed = "剛剛";
+    workPos++;
+  }
+  bar();
+  $("#work-progress-text").textContent = `完成：${workQueue.length} 筆已送出`;
+  updateWorkSummary();
 }
 
 // ---------- 上傳 ----------
@@ -537,3 +727,5 @@ api("/api/version").then((v) => {
 });
 
 api("/api/settings").then((cfg) => (isDryRun = cfg.printer.dry_run));
+
+loadWork();

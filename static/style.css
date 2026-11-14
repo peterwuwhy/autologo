@@ -135,3 +135,23 @@ dialog form { text-align: right; }
   .row-between { flex-direction: column; }
   header { flex-wrap: wrap; }
 }
+
+/* 工作單 */
+.toolbar.wrap { flex-wrap: wrap; margin-top: 0; }
+label.inline { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+label.inline select { width: auto; min-width: 120px; }
+#work-table td { font-size: 14px; }
+#work-table select { min-width: 150px; }
+#work-table input.size { min-width: 140px; }
+#work-table input.size.need, #work-table select.need { border-color: var(--bad); background: #fff5f5; }
+#work-table tr.off td { color: var(--muted); background: #fafbfc; }
+#work-table .hint { display: block; margin-top: 2px; }
+#work-table .hint.warn { color: #9a6700; }
+.check-line { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--muted); font-size: 14px; }
+fieldset label.wide { grid-column: 1 / -1; }
+textarea { font: inherit; color: var(--text); padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; width: 100%; resize: vertical; }
+#work-bar { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+#work-progress-text { flex: 1; }
+#tab-work { overflow-x: auto; }
+#work-table td:nth-child(-n+7), #work-table th { white-space: nowrap; }
+#work-table td.status { word-break: break-all; min-width: 120px; }

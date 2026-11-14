@@ -14,3 +14,6 @@ dist/
 AutoLogo.zip
 .DS_Store
 __MACOSX/
+ezp/
+ezp_map.json
+ezp_printed.json

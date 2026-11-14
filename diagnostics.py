@@ -17,6 +17,7 @@ from version import VERSION
 CODE_FILES = [
     "app.py", "ezpl.py", "winprint.py", "diagnostics.py", "settings.py", "label_render.py",
     "excel_reader.py", "make_template.py", "updater.py", "version.py", "templates/index.html", "static/app.js",
+    "ezp.py", "gdrive.py", "worksheet.py",
 ]
 
 
@@ -107,6 +108,27 @@ def _label_section(cfg, checks):
     return lines
 
 
+def _ezp_section(cfg):
+    """布標（.ezp）：本機有幾個、用到的字型這台電腦有沒有。"""
+    import ezp
+    import gdrive
+    lib = gdrive.library()
+    brands = sorted({e["brand"] for e in lib})
+    lines = [f"  本機布標：{len(lib)} 個，品牌：{'、'.join(brands) or '（尚未同步）'}"]
+    faces, broken = set(), []
+    for e in lib:
+        try:
+            faces |= {o["face"] for o in ezp.load(e["path"])["objects"] if o["type"] == "text"}
+        except Exception as err:
+            broken.append(f'{e["brand"]}/{e["name"]}（{err}）')
+    for face in sorted(faces):
+        regular, _ = ezp.FACES.get(face.lower(), ([], []))
+        hit = ezp._find_file(regular)
+        lines.append(f"  字型「{face}」：{hit[0] if hit else '找不到，會用替代字型'}")
+    lines += [f"  讀不懂的布標：{b}" for b in broken]
+    return lines
+
+
 def _last_job_section(checks):
     job = ezpl.load_last_job()
     if not job:
@@ -154,6 +176,9 @@ def build_report():
         "",
         "[標籤圖]",
         *label,
+        "",
+        "[布標 .ezp]",
+        *_ezp_section(cfg),
         "",
         "[設定 config.json]",
         *[f"  {s}" for s in json.dumps(cfg, ensure_ascii=False, indent=2).splitlines()],

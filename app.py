@@ -17,10 +17,13 @@ from werkzeug.exceptions import HTTPException
 
 import diagnostics
 import excel_reader
+import ezp
 import ezpl
+import gdrive
 import settings
 import updater
 import winprint
+import worksheet
 from label_render import SAMPLE_LABEL, render_png
 from make_template import template_bytes
 from version import VERSION
@@ -64,7 +67,7 @@ def _log(label, result, message):
             w.writerow(["時間", "型號", "尺寸", "張數", "結果", "訊息"])
         w.writerow([
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            label["型號"], f'{label["寬"]}x{label["長"]}', label["數量"], result, message,
+            label["型號"], ezpl.label_size(label), label["數量"], result, message,
         ])
 
 
@@ -290,6 +293,131 @@ def calibrate_offset():
     if err:
         return jsonify(ok=False, message=err), 400
     return jsonify(ok=True, message=f"左右偏移已設為 {left:g}mm")
+
+
+# ---------- 工作單（Google 試算表）+ 布標（.ezp） ----------
+
+_work = {"book": None, "time": ""}   # 最近一次下載的工作單
+work_lock = threading.Lock()
+
+
+def _work_book(refresh):
+    cfg = settings.load()
+    if refresh or _work["book"] is None:
+        _work["book"] = worksheet.open_book(gdrive.fetch_sheet(cfg["source"]["sheet_url"]))
+        _work["time"] = datetime.datetime.now().strftime("%m/%d %H:%M")
+    return _work["book"], cfg
+
+
+def _default_tab(names):
+    """今天的工作表（民國年月日，例如 1151006）；沒有就用最後一個。"""
+    today = datetime.date.today()
+    name = f"{today.year - 1911}{today.month:02d}{today.day:02d}"
+    return name if name in names else names[-1]
+
+
+@app.get("/api/work")
+def work():
+    """工作單內容與比對結果。refresh=1 重新從 Google 下載；第一次使用時自動同步布標。"""
+    with work_lock:
+        try:
+            book, cfg = _work_book(request.args.get("refresh") == "1")
+            sync_msg = ""
+            if not gdrive.library():
+                sync_msg = gdrive.sync(cfg["source"]["folder_url"])
+        except gdrive.SourceError as e:
+            return jsonify(ok=False, message=str(e))
+        names = book.sheetnames
+        tab = request.args.get("tab") or ""
+        if tab not in names:
+            tab = _default_tab(names)
+        data = worksheet.read_tab(book[tab])
+        rows = worksheet.annotate(tab, data["rows"], cfg)
+    return jsonify(
+        ok=True, tabs=names, tab=tab, title=data["title"], rows=rows, errors=data["errors"],
+        fetched=_work["time"], library=len(gdrive.library()), sync=sync_msg, dry_run=cfg["printer"].get("dry_run", False),
+    )
+
+
+@app.post("/api/work/sync")
+def work_sync():
+    with work_lock:
+        try:
+            return jsonify(ok=True, message=gdrive.sync(settings.load()["source"]["folder_url"]))
+        except gdrive.SourceError as e:
+            return jsonify(ok=False, message=str(e))
+
+
+def _template_path(folder, name):
+    for e in gdrive.library():
+        if e["brand"] == folder and e["name"] == name:
+            return e["path"]
+    abort(404, f"找不到布標「{folder}/{name}」，請按「同步布標」")
+
+
+def _render_ezp(folder, name, size, cfg):
+    """回傳 (圖, 警告, 列印用的設定)。標籤長度依布標檔，其餘沿用設定頁。"""
+    try:
+        tpl = ezp.load(_template_path(folder, name))
+    except (OSError, ezp.EzpError) as e:
+        abort(400, f"布標「{name}」讀取失敗：{e}")
+    job_cfg = settings._merge(cfg, {"label": {"height_mm": ezp.label_height_mm(tpl, cfg["printer"]["dpi"])}})
+    img, warnings = ezp.render(tpl, job_cfg, size or None)
+    return img, warnings, job_cfg
+
+
+@app.get("/api/work/preview.png")
+def work_preview():
+    img, _, _ = _render_ezp(request.args.get("brand", ""), request.args.get("file", ""),
+                            request.args.get("size", "").strip(), settings.load())
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png", max_age=0)
+
+
+@app.get("/api/work/size")
+def work_size():
+    """換布標時重算尺寸文字：size 是工作單上的寫法（5x6.2）。"""
+    try:
+        tpl = ezp.load(_template_path(request.args.get("brand", ""), request.args.get("file", "")))
+    except (OSError, ezp.EzpError) as e:
+        abort(400, str(e))
+    feet = worksheet.parse_feet(request.args.get("size", ""))
+    text = ezp.size_text(tpl, feet, worksheet.size_table(settings.load()))
+    return jsonify(size_text=text or "", size_old=ezp.size_line(tpl) or "")
+
+
+@app.post("/api/work/print")
+def work_print():
+    """列印工作單的一列：{tab, row, file, size}。品牌與數量以伺服器手上的工作單為準。"""
+    data = request.get_json(force=True) or {}
+    with work_lock:
+        if _work["book"] is None or data.get("tab") not in _work["book"].sheetnames:
+            return jsonify(ok=False, message="工作單已更新，請按「重新整理」後再印")
+        cfg = settings.load()
+        tab = data["tab"]
+        rows = worksheet.annotate(tab, worksheet.read_tab(_work["book"][tab])["rows"], cfg)
+    row = next((r for r in rows if r["row"] == data.get("row")), None)
+    if row is None or not row["folder"]:
+        return jsonify(ok=False, message="找不到這一列，請按「重新整理」後再印")
+    name, size = str(data.get("file") or ""), str(data.get("size") or "").strip()
+    if name not in row["files"]:
+        return jsonify(ok=False, message="請先選擇布標")
+    if not size:
+        return jsonify(ok=False, message="請先填寫尺寸")
+    img, warnings, job_cfg = _render_ezp(row["folder"], name, size, cfg)
+    label = {"型號": f'{row["folder"]} {worksheet.file_title(name)}', "尺寸": size, "數量": row["qty"]}
+    file_name = re.sub(r'[\\/:*?"<>|\s]', "_", f'{label["型號"]}_{size}')
+    ok, message = _send_job("工作單列印", lambda _cfg: ezpl.build_image_job(img, job_cfg, row["qty"]), label, file_name)
+    _log(label, "成功" if ok else "失敗", message)
+    if ok:
+        worksheet.remember(row["folder"], row["spec"], name)
+        if not cfg["printer"].get("dry_run"):
+            worksheet.mark_printed(tab, row, datetime.datetime.now().strftime("%m/%d %H:%M"))
+        if warnings:
+            message += "（注意：" + "；".join(warnings) + "）"
+    return jsonify(ok=ok, message=message)
 
 
 @app.get("/api/usb-printers")
